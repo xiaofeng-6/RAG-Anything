@@ -717,9 +717,25 @@ class MineruParser(Parser):
             # Log the command being executed
             cls.logger.info(f"Executing mineru command: {' '.join(cmd)}")
 
-            env = None
+            # MinerU uses httpx/requests internally and may inherit proxy-related
+            # environment variables from the current process. Some environments
+            # configure SOCKS proxies via ALL_PROXY (e.g. socks://127.0.0.1:xxxx),
+            # but httpx may reject unsupported schemes, causing MinerU to fail.
+            #
+            # To make the parser robust for local web demo usage, we remove proxy
+            # variables by default for the MinerU subprocess. Users can still
+            # explicitly pass proxy settings via `env={...}` when calling APIs.
+            env = os.environ.copy()
+            for k in (
+                "ALL_PROXY",
+                "all_proxy",
+                "HTTP_PROXY",
+                "http_proxy",
+                "HTTPS_PROXY",
+                "https_proxy",
+            ):
+                env.pop(k, None)
             if custom_env:
-                env = os.environ.copy()
                 env.update(custom_env)
 
             subprocess_kwargs = {

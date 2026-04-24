@@ -429,7 +429,9 @@
     };
 
     refreshStatus();
-    setInterval(refreshStatus, 8000);
+    // Polling status too frequently can spam server logs.
+    // 30s is a good default for local demos.
+    setInterval(refreshStatus, 30000);
   </script>
 </body>
 </html>

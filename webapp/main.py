@@ -43,6 +43,27 @@ def _static_dir() -> Path:
     return Path(__file__).resolve().parent / "static"
 
 
+def _disable_proxy_env_for_web_demo() -> None:
+    """
+    The local web demo should be robust in environments where users have global proxy
+    variables set (especially ALL_PROXY=socks://127.0.0.1:xxxx). Those proxies can:
+    - break httpx (unknown socks scheme) used by MinerU/LLM clients
+    - break requests-based SDKs (ProxyError when local proxy isn't running)
+
+    Since the demo runs on localhost and typically targets public HTTPS endpoints
+    (DashScope/OpenAI-compatible), we remove proxy env vars for this process.
+    """
+    for k in (
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+    ):
+        os.environ.pop(k, None)
+
+
 def _abs_workspace_path(path_str: str) -> str:
     p = Path(path_str).expanduser()
     if not p.is_absolute():
@@ -127,6 +148,38 @@ state = AppState()
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
+    _disable_proxy_env_for_web_demo()
+    # Auto-initialize RAG from environment variables (e.g., .env) so that
+    # users don't need to fill API Key / Base URL every time they open the UI.
+    async with state.lock:
+        state.last_init_error = None
+        await state.finalize_rag()
+        rag: Optional[RAGAnything] = None
+        try:
+            # Use env defaults; api_key/base_url intentionally left empty so
+            # _build_rag_from_config falls back to environment variables.
+            body = ConfigureBody(api_key="", base_url=None)
+            rag = _build_rag_from_config(body)
+            result = await rag._ensure_lightrag_initialized()
+            if isinstance(result, dict) and not result.get("success", True):
+                state.last_init_error = str(result.get("error", "Initialization failed"))
+                try:
+                    await rag.finalize_storages()
+                except Exception:
+                    pass
+            else:
+                state.rag = rag
+                rag = None
+        except Exception as e:
+            state.last_init_error = str(e)
+            if rag is not None:
+                try:
+                    await rag.finalize_storages()
+                except Exception:
+                    pass
+        finally:
+            rag = None
+
     yield
     async with state.lock:
         await state.finalize_rag()
